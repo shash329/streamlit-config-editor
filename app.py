@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
-import io
 
 #Configuration
 DOMAINS = ["CDC", "RDC", "SC", "LINT", "CQ", "SENTRY", "DFT", "SAFECONNECT", "CQMAI"]
 
-#Parse text file
+#Parse uploaded file
 def parse_and_widen(file_content):
     rows = []
     lines = file_content.decode("utf-8").splitlines()
@@ -36,19 +35,39 @@ def parse_and_widen(file_content):
     df = pd.DataFrame(rows, columns=columns)
     return df
 
-def unpivot_and_save(wide_df):
+def unpivot_and_save(df):
+    # Flatten MultiIndex columns if needed
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(col).strip('_') for col in df.columns]
+
+    # Clean column names: strip spaces and underscores
+    df.columns = [col.strip().replace(" ", "").replace("__", "_") for col in df.columns]
+
+    def find_col(possible_names):
+        for name in possible_names:
+            if name in df.columns:
+                return name
+        st.error(f"Available columns: {df.columns.tolist()}")
+        raise KeyError(f"Could not find any of: {possible_names}")
+
     records = []
-    for _, row in wide_df.iterrows():
-        varname = row[('Variable Name', '')]
-        _type = row[('Type', '')]
-        description = row[('Description', '')]
-        origin = row[('CDC', 'VarType')]  # assuming uniform origin
+    for _, row in df.iterrows():
+        varname_col = find_col(["Variable Name", "VariableName", "Variable_Name", "Variable Name_", "VariableName_"])
+        type_col = find_col(["Type", "Type_"])
+        desc_col = find_col(["Description", "Description_"])
+        origin_col = find_col(["CDC VarType", "CDC_VarType", "CDCVarType"])
+
+        varname = row[varname_col]
+        _type = row[type_col]
+        description = row[desc_col]
+        origin = row[origin_col]
 
         line = f"{varname},{_type},{origin},\"{description}\""
 
         domain_parts = []
         for domain in DOMAINS:
-            value = row.get((domain, 'Value'), '')
+            value_col = f"{domain}_Value"
+            value = row.get(value_col, "")
             domain_parts.append(f"{domain}:{value}")
 
         line += "," + ",".join(domain_parts)
@@ -73,12 +92,16 @@ if uploaded_file:
     )
 
     if st.button("Download Updated File"):
-        updated_content = unpivot_and_save(edited_df)
-        st.download_button(
-            label="Download .txt file",
-            data=updated_content,
-            file_name="updated_config.txt",
-            mime="text/plain"
-        )
-else:
-    st.info("Please upload a .txt configuration file to begin.")
+        st.write("Column names after editing:")
+        st.write(edited_df.columns.tolist())  # Show what's actually in the DataFrame
+
+        try:
+            updated_content = unpivot_and_save(edited_df)
+            st.download_button(
+                label="Download .txt file",
+                data=updated_content,
+                file_name="updated_config.txt",
+                mime="text/plain"
+            )
+        except Exception as e:
+            st.error(f"Error: {e}")
